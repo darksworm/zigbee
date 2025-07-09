@@ -1,0 +1,4 @@
+.pio/
+.DS_Store
+CMakeLists.txt
+sdkconfig*

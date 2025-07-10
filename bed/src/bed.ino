@@ -1,4 +1,4 @@
-#ifndef ZIGBEE_MODE_ED
+#ifndef ZIGBEE_MODE_ZCZR
   #error "Zigbee end device mode is not selected in Tools->Zigbee mode"
 #endif
 
@@ -108,7 +108,7 @@ void setup()
   Zigbee.addEndpoint(&zbColorLight);
   Zigbee.addEndpoint(&zbContactSwitch);
 
-  if (!Zigbee.begin()) {
+  if (!Zigbee.begin(ZIGBEE_ROUTER)) {
     Serial.println("Zigbee failed to start, rebooting");
     ESP.restart();
   }

@@ -6,7 +6,9 @@
 #include <FastLED.h>
 
 #define ZIGBEE_RGB_LIGHT_ENDPOINT 10
+#define CONTACT_SWITCH_ENDPOINT_NUMBER 11
 #define BUTTON_PIN                BOOT_PIN
+#define BED_BUTTON_PIN 8
 
 // Each strip has 1 booster LED (idx 0) + 12 real LEDs (1..12)
 static constexpr uint8_t SKIP       = 1;
@@ -16,10 +18,9 @@ static constexpr uint8_t TOTAL_LEDS = SKIP + REAL_LEDS;
 // Per-strip pixel buffers
 CRGB leds0[TOTAL_LEDS];
 CRGB leds1[TOTAL_LEDS];
-CRGB leds2[TOTAL_LEDS];
-CRGB leds3[TOTAL_LEDS];
 
 ZigbeeColorDimmableLight zbColorLight(ZIGBEE_RGB_LIGHT_ENDPOINT);
+ZigbeeContactSwitch zbContactSwitch = ZigbeeContactSwitch(CONTACT_SWITCH_ENDPOINT_NUMBER);
 
 //–– Zigbee → FastLED callback ––
 void setRGBLight(bool    state,
@@ -28,50 +29,30 @@ void setRGBLight(bool    state,
                  uint8_t blue,
                  uint8_t level)
 {
-  float scale = (state && level) ? float(level) / 255.0f : 0.0f;
+  if (level == 254) {
+    level = 255;
+  }
 
-  // strip 0 on GP14
+  FastLED.setBrightness(level);
+
   leds0[0] = CRGB::Black;
   for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
-    if (scale > 0) {
-      leds0[i].r = red   * scale;
-      leds0[i].g = green * scale;
-      leds0[i].b = blue  * scale;
+    if (level > 1) {
+      leds0[i].r = red;
+      leds0[i].g = green;
+      leds0[i].b = blue;
     } else {
       leds0[i] = CRGB::Black;
     }
   }
-  // strip 1 on GP13
   leds1[0] = CRGB::Black;
   for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
-    if (scale > 0) {
-      leds1[i].r = red   * scale;
-      leds1[i].g = green * scale;
-      leds1[i].b = blue  * scale;
+    if (level > 1) {
+      leds1[i].r = red;
+      leds1[i].g = green;
+      leds1[i].b = blue;
     } else {
       leds1[i] = CRGB::Black;
-    }
-  }
-  // strip 2 on GP12
-  leds2[0] = CRGB::Black;
-  for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
-    if (scale > 0) {
-      leds2[i].r = red   * scale;
-      leds2[i].g = green * scale;
-      leds2[i].b = blue  * scale;
-    } else {
-      leds2[i] = CRGB::Black;
-    }
-  }
-  // strip 3 on GP11
-  leds3[0] = CRGB::Black;
-  for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
-    if (scale > 0) {
-      leds3[i].r = red   * scale;
-      leds3[i].g = green * scale;
-      leds3[i].b = blue  * scale;
-    } else {
-      leds3[i] = CRGB::Black;
     }
   }
 
@@ -88,7 +69,7 @@ void identify(uint16_t time)
   }
   blink = !blink;
   for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
-    leds0[i] = leds1[i] = leds2[i] = leds3[i] =
+    leds0[i] = leds1[i] =
       blink ? CRGB::White : CRGB::Black;
   }
   FastLED.show();
@@ -100,28 +81,23 @@ void setup()
 
   // Use the generic FastLED driver (bit-bang)
   FastLED.setBrightness(255);
+  FastLED.setMaxPowerInMilliWatts(3000);
 
   // strip 0 → GP14
-  auto &ctl0 = FastLED.addLeds<WS2812B>(leds0, TOTAL_LEDS);
-  ctl0.setPin(14).setCorrection(TypicalLEDStrip);
-  // strip 1 → GP13
-  auto &ctl1 = FastLED.addLeds<WS2812B>(leds1, TOTAL_LEDS);
-  ctl1.setPin(13).setCorrection(TypicalLEDStrip);
-  // strip 2 → GP12
-  auto &ctl2 = FastLED.addLeds<WS2812B>(leds2, TOTAL_LEDS);
-  ctl2.setPin(12).setCorrection(TypicalLEDStrip);
-  // strip 3 → GP11
-  auto &ctl3 = FastLED.addLeds<WS2812B>(leds3, TOTAL_LEDS);
-  ctl3.setPin(11).setCorrection(TypicalLEDStrip);
+  auto &ctl0 = FastLED.addLeds<WS2812B, 20, GRB>(leds0, TOTAL_LEDS);
+  ctl0.setCorrection(TypicalLEDStrip);
+  auto &ctl1 = FastLED.addLeds<WS2812B, 19, GRB>(leds1, TOTAL_LEDS);
+  ctl1.setCorrection(TypicalLEDStrip);
 
   // clear all pixels (booster + real)
   for (uint8_t i = 0; i < TOTAL_LEDS; ++i) {
-    leds0[i] = leds1[i] = leds2[i] = leds3[i] = CRGB::Black;
+    leds0[i] = leds1[i] = CRGB::Black;
   }
   FastLED.show();
 
   // button for factory-reset / brightness step
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BED_BUTTON_PIN, INPUT);
 
   // Zigbee callbacks & endpoint
   zbColorLight.onLightChange(setRGBLight);
@@ -130,6 +106,8 @@ void setup()
 
   Serial.println("Adding Zigbee endpoint");
   Zigbee.addEndpoint(&zbColorLight);
+  Zigbee.addEndpoint(&zbContactSwitch);
+
   if (!Zigbee.begin()) {
     Serial.println("Zigbee failed to start, rebooting");
     ESP.restart();
@@ -140,7 +118,14 @@ void setup()
     delay(100);
   }
   Serial.println(" connected");
+
+  zbContactSwitch.setClosed();
 }
+
+bool stable     = HIGH;          // debounced state
+bool candidate  = HIGH;          // possible new state
+unsigned long lastFlip = 0;
+#define DEBOUNCE_MS 25
 
 void loop()
 {
@@ -160,5 +145,26 @@ void loop()
       zbColorLight.getLightLevel() + 50
     );
   }
-  delay(100);
+
+  bool raw = digitalRead(BED_BUTTON_PIN);
+
+  if (raw != candidate) {             // first time we see a flip
+    candidate = raw;
+    lastFlip  = millis();             // start debounce timer
+  }
+
+  if ( (millis() - lastFlip) >= DEBOUNCE_MS &&
+       candidate != stable) {         // stayed steady long enough
+    stable = candidate;               // accept it
+
+    if (stable == LOW) {              // pressed
+      zbContactSwitch.setOpen();
+      Serial.println("setting open");
+    } else {
+      zbContactSwitch.setClosed();
+      Serial.println("setting closed");
+    }
+  }
+
+  FastLED.delay(33);
 }

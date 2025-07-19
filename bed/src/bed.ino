@@ -13,7 +13,7 @@
 #define EEPROM_SIZE 5
 
 // Each strip has 1 booster LED (idx 0) + 12 real LEDs (1..12)
-static constexpr uint8_t SKIP       = 1;
+static constexpr uint8_t SKIP       = 2; //skipping more than one because apparently at least one led has died
 static constexpr uint8_t REAL_LEDS  = 12;
 static constexpr uint8_t TOTAL_LEDS = SKIP + REAL_LEDS;
 
@@ -28,11 +28,31 @@ ZigbeeContactSwitch zbContactSwitch = ZigbeeContactSwitch(CONTACT_SWITCH_ENDPOIN
 struct RGBCfg {
     bool    state;
     uint8_t red, green, blue, level;
+
+    void log() const {
+      Serial.print(F("state 0x"));  Serial.println(state, HEX);
+      Serial.print(F("R "));        Serial.println(red);
+      Serial.print(F("G "));        Serial.println(green);
+      Serial.print(F("B "));        Serial.println(blue);
+      Serial.print(F("L "));        Serial.println(level);
+      Serial.println();             // blank line
+    }
 } cfg;
+
+volatile bool ledsDirty = false;
+portMUX_TYPE ledMux = portMUX_INITIALIZER_UNLOCKED;
+
+void markLedsDirty() {
+  portENTER_CRITICAL_ISR(&ledMux);
+  ledsDirty = true;
+  portEXIT_CRITICAL_ISR(&ledMux);
+}
 
 void saveRGB(const RGBCfg &c)
 {
+    Serial.print("save");
     EEPROM.put(0, c);
+    EEPROM.commit();
 }
 
 void loadRGB(RGBCfg &c)
@@ -49,6 +69,14 @@ void setRGBLight(bool    state,
 {
   if (level == 254) {
     level = 255;
+  }
+
+  uint8_t maxc = std::max({red, green, blue});
+  if (maxc) {
+    float k = 255.0f / maxc;
+    red = round(red * k);
+    green = round(green * k);
+    blue = round(blue * k);
   }
 
   FastLED.setBrightness(level);
@@ -75,8 +103,7 @@ void setRGBLight(bool    state,
   }
 
   saveRGB({state, red, green, blue, level});
-
-  FastLED.show();
+  markLedsDirty();
 }
 
 void identify(uint16_t time)
@@ -92,7 +119,7 @@ void identify(uint16_t time)
     leds0[i] = leds1[i] =
       blink ? CRGB::White : CRGB::Black;
   }
-  FastLED.show();
+  markLedsDirty();
 }
 
 
@@ -105,7 +132,9 @@ void setup()
   FastLED.setMaxPowerInMilliWatts(4000);
 
   auto &ctl0 = FastLED.addLeds<WS2812B, 20, GRB>(leds0, TOTAL_LEDS);
+  ctl0.setCorrection(TypicalLEDStrip);
   auto &ctl1 = FastLED.addLeds<WS2812B, 19, GRB>(leds1, TOTAL_LEDS);
+  ctl1.setCorrection(TypicalLEDStrip);
 
   // clear all pixels (booster + real)
   for (uint8_t i = 0; i < TOTAL_LEDS; ++i) {
@@ -141,6 +170,7 @@ void setup()
 
   RGBCfg s;
   loadRGB(s);
+
   if (s.state == 0xFF && s.red == 0xFF && s.green == 0xFF && s.blue == 0xFF && s.level == 0xFF) {
     setRGBLight(0, 255, 135, 16, 0);
   } else {
@@ -190,6 +220,14 @@ void loop()
       zbContactSwitch.setClosed();
       Serial.println("setting closed");
     }
+  }
+
+   if (ledsDirty) {          // only the Arduino task touches FastLED
+    portENTER_CRITICAL(&ledMux);
+    ledsDirty = false;
+    portEXIT_CRITICAL(&ledMux);
+
+    FastLED.show();         // single, thread‑safe call
   }
 
   FastLED.delay(33);

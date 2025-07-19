@@ -2,6 +2,7 @@
   #error "Zigbee end device mode is not selected in Tools->Zigbee mode"
 #endif
 
+#include <EEPROM.h>
 #include "Zigbee.h"
 #include <FastLED.h>
 
@@ -9,18 +10,35 @@
 #define CONTACT_SWITCH_ENDPOINT_NUMBER 11
 #define BUTTON_PIN                BOOT_PIN
 #define BED_BUTTON_PIN 8
+#define EEPROM_SIZE 5
 
 // Each strip has 1 booster LED (idx 0) + 12 real LEDs (1..12)
 static constexpr uint8_t SKIP       = 1;
 static constexpr uint8_t REAL_LEDS  = 12;
 static constexpr uint8_t TOTAL_LEDS = SKIP + REAL_LEDS;
 
+#define EEPROM_SIZE 5
 // Per-strip pixel buffers
 CRGB leds0[TOTAL_LEDS];
 CRGB leds1[TOTAL_LEDS];
 
 ZigbeeColorDimmableLight zbColorLight(ZIGBEE_RGB_LIGHT_ENDPOINT);
 ZigbeeContactSwitch zbContactSwitch = ZigbeeContactSwitch(CONTACT_SWITCH_ENDPOINT_NUMBER);
+
+struct RGBCfg {
+    bool    state;
+    uint8_t red, green, blue, level;
+} cfg;
+
+void saveRGB(const RGBCfg &c)
+{
+    EEPROM.put(0, c);
+}
+
+void loadRGB(RGBCfg &c)
+{
+    EEPROM.get(0, c);
+}
 
 //–– Zigbee → FastLED callback ––
 void setRGBLight(bool    state,
@@ -56,6 +74,8 @@ void setRGBLight(bool    state,
     }
   }
 
+  saveRGB({state, red, green, blue, level});
+
   FastLED.show();
 }
 
@@ -75,19 +95,17 @@ void identify(uint16_t time)
   FastLED.show();
 }
 
+
 void setup()
 {
   Serial.begin(115200);
+  EEPROM.begin(EEPROM_SIZE);
 
-  // Use the generic FastLED driver (bit-bang)
   FastLED.setBrightness(255);
-  FastLED.setMaxPowerInMilliWatts(3000);
+  FastLED.setMaxPowerInMilliWatts(4000);
 
-  // strip 0 → GP14
   auto &ctl0 = FastLED.addLeds<WS2812B, 20, GRB>(leds0, TOTAL_LEDS);
-  ctl0.setCorrection(TypicalLEDStrip);
   auto &ctl1 = FastLED.addLeds<WS2812B, 19, GRB>(leds1, TOTAL_LEDS);
-  ctl1.setCorrection(TypicalLEDStrip);
 
   // clear all pixels (booster + real)
   for (uint8_t i = 0; i < TOTAL_LEDS; ++i) {
@@ -120,6 +138,14 @@ void setup()
   Serial.println(" connected");
 
   zbContactSwitch.setClosed();
+
+  RGBCfg s;
+  loadRGB(s);
+  if (s.state == 0xFF && s.red == 0xFF && s.green == 0xFF && s.blue == 0xFF && s.level == 0xFF) {
+    setRGBLight(0, 255, 135, 16, 0);
+  } else {
+    setRGBLight(s.state, s.red, s.green, s.blue, s.level);
+  }
 }
 
 bool stable     = HIGH;          // debounced state

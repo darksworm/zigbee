@@ -1,7 +1,10 @@
 #include "Zigbee.h"
+#include "freertos/semphr.h"
 
 #define ZIGBEE_LIGHT_ENDPOINT 10
 #define ZIGBEE_WATER_LEVEL_SENSOR_EP 11
+
+SemaphoreHandle_t ioLock;
 
 // Pins
 const uint8_t relayPin       = 12;
@@ -18,9 +21,17 @@ const unsigned long minHoldTime = 75;       // Minimum press duration to count (
 ZigbeeLight zbLight(ZIGBEE_LIGHT_ENDPOINT);
 ZigbeeOccupancySensor zbOccupancySensor = ZigbeeOccupancySensor(ZIGBEE_WATER_LEVEL_SENSOR_EP);
 
-// Drive relay: true → ON (LOW), false → OFF (HIGH)
-void setRelay(bool value) {
-  digitalWrite(relayPin, value ? LOW : HIGH);
+void safeSetRelay(bool v)
+{
+    xSemaphoreTake(ioLock, portMAX_DELAY);
+    digitalWrite(relayPin, v ? LOW : HIGH);
+    zbLight.setLight(v);
+    xSemaphoreGive(ioLock);
+}
+
+void setRelayFromZigbee(bool v)
+{
+    safeSetRelay(v);
 }
 
 // Interrupt Service Routine (ISR) - triggered on button FALLING edge
@@ -38,6 +49,8 @@ void onZbDisconnected() {
 void setup() {
   Serial.begin(115200);
 
+  ioLock = xSemaphoreCreateMutex();
+
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, HIGH); // OFF by default
   pinMode(resetButtonPin, INPUT_PULLUP);
@@ -49,7 +62,7 @@ void setup() {
 
   // Zigbee setup
   zbLight.setManufacturerAndModel("ilmars-engineering-1", "coffee-machine-1");
-  zbLight.onLightChange(setRelay); // Callback when Zigbee sends on/off
+  zbLight.onLightChange(setRelayFromZigbee); // Callback when Zigbee sends on/off
   Zigbee.addEndpoint(&zbLight);
   Zigbee.addEndpoint(&zbOccupancySensor);
 
@@ -92,7 +105,7 @@ void loop() {
       bool relayOn = !currentlyOn;
 
       Serial.println("Power button held, toggling relay");
-      setRelay(relayOn);
+      safeSetRelay(relayOn);
       zbLight.setLight(relayOn);
     } else {
       Serial.println("Power button spike ignored");

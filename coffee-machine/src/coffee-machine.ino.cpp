@@ -1,3 +1,6 @@
+# 1 "/var/folders/41/ddnwy4p93f3_lt7v0tnq8yy80000gn/T/tmplueptuyw"
+#include <Arduino.h>
+# 1 "/Users/ilmars/Dev/private/zigbee/coffee-machine/src/coffee-machine.ino"
 #include "Zigbee.h"
 #include "freertos/semphr.h"
 
@@ -6,20 +9,26 @@
 
 SemaphoreHandle_t ioLock;
 
-// Pins
-const uint8_t relayPin       = 12;
+
+const uint8_t relayPin = 12;
 const uint8_t resetButtonPin = BOOT_PIN;
 const uint8_t powerButtonPin = 11;
 const uint8_t waterLevelSensorPin = 13;
 
-// Debounce configuration
-volatile bool checkButtonHold = false; // Flag to check if button is held
-volatile unsigned long buttonPressStart = 0; // Timestamp of initial button press
-const unsigned long minHoldTime = 25;       // Minimum press duration to count (ms)
+
+volatile bool checkButtonHold = false;
+volatile unsigned long buttonPressStart = 0;
+const unsigned long minHoldTime = 25;
 
 ZigbeeLight zbLight(ZIGBEE_LIGHT_ENDPOINT);
 ZigbeeOccupancySensor zbOccupancySensor = ZigbeeOccupancySensor(ZIGBEE_WATER_LEVEL_SENSOR_EP);
-
+void safeSetRelay(bool v);
+void setRelayFromZigbee(bool v);
+void IRAM_ATTR handlePowerButtonPress();
+void onZbDisconnected();
+void setup();
+void loop();
+#line 23 "/Users/ilmars/Dev/private/zigbee/coffee-machine/src/coffee-machine.ino"
 void safeSetRelay(bool v)
 {
     xSemaphoreTake(ioLock, portMAX_DELAY);
@@ -33,14 +42,14 @@ void setRelayFromZigbee(bool v)
     safeSetRelay(v);
 }
 
-// Interrupt Service Routine (ISR) - triggered on button FALLING edge
+
 void IRAM_ATTR handlePowerButtonPress() {
-  // Record the time the button was pressed
+
   buttonPressStart = millis();
-  checkButtonHold = true; // Set flag to process in main loop
+  checkButtonHold = true;
 }
 
-// Called by Zigbee library on disconnect
+
 void onZbDisconnected() {
   Serial.println("Zigbee disconnected, attempting rejoin…");
 }
@@ -51,17 +60,17 @@ void setup() {
   ioLock = xSemaphoreCreateMutex();
 
   pinMode(relayPin, OUTPUT);
-  digitalWrite(relayPin, HIGH); // OFF by default
+  digitalWrite(relayPin, HIGH);
   pinMode(resetButtonPin, INPUT_PULLUP);
-  pinMode(powerButtonPin, INPUT); // this has external pullup
-  pinMode(waterLevelSensorPin, INPUT); // this has external pullup
+  pinMode(powerButtonPin, INPUT);
+  pinMode(waterLevelSensorPin, INPUT);
 
-  // Attach interrupt to power button pin
+
   attachInterrupt(digitalPinToInterrupt(powerButtonPin), handlePowerButtonPress, FALLING);
 
-  // Zigbee setup
+
   zbLight.setManufacturerAndModel("ilmars-engineering-1", "coffee-machine-1");
-  zbLight.onLightChange(setRelayFromZigbee); // Callback when Zigbee sends on/off
+  zbLight.onLightChange(setRelayFromZigbee);
   Zigbee.addEndpoint(&zbLight);
   Zigbee.addEndpoint(&zbOccupancySensor);
 
@@ -81,10 +90,10 @@ void setup() {
 
 void loop() {
   auto value = digitalRead(waterLevelSensorPin);
-  static int lastState = 0; // unitialized
-  int currentState = value == LOW 
-    ? 1  // missing water
-    : 2; // Has water
+  static int lastState = 0;
+  int currentState = value == LOW
+    ? 1
+    : 2;
 
   if (currentState != lastState) {
     zbOccupancySensor.setOccupancy(currentState == 2);
@@ -93,7 +102,7 @@ void loop() {
     lastState = currentState;
   }
 
-  // Process button press if flag was set by ISR
+
   if (checkButtonHold) {
     if (millis() - buttonPressStart >= minHoldTime) {
       if (digitalRead(powerButtonPin) == LOW) {
@@ -107,11 +116,11 @@ void loop() {
         Serial.println("Power button spike ignored");
       }
 
-      checkButtonHold = false; // Clear the flag
+      checkButtonHold = false;
     }
   }
 
-  // Reconnect logic if Zigbee disconnects
+
   if (!Zigbee.connected()) {
     Serial.println("Zigbee connection lost, attempting rejoin…");
     static unsigned long lostAt = millis();
@@ -121,7 +130,7 @@ void loop() {
     }
   }
 
-  // Factory reset: hold reset button for 3s
+
   if (digitalRead(resetButtonPin) == LOW) {
     unsigned long t0 = millis();
     while (digitalRead(resetButtonPin) == LOW) {
@@ -134,5 +143,5 @@ void loop() {
     }
   }
 
-  delay(100); // Small delay to reduce loop frequency
+  delay(100);
 }

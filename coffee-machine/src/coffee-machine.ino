@@ -1,5 +1,7 @@
 #include "Zigbee.h"
 #include "freertos/semphr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
 
 #define ZIGBEE_LIGHT_ENDPOINT 10
 #define ZIGBEE_WATER_LEVEL_SENSOR_EP 11
@@ -45,7 +47,32 @@ void onZbDisconnected() {
   Serial.println("Zigbee disconnected, attempting rejoin…");
 }
 
+static TimerHandle_t zbWatchdogTmr;
+static uint32_t      disconnectedSince = 0;        // 0 = we’re connected
+
+void IRAM_ATTR zbWatchdogCb(TimerHandle_t)
+{
+    if (!Zigbee.connected()) {
+        if (disconnectedSince == 0) {
+            disconnectedSince = esp_log_timestamp();     // first miss
+            ESP_LOGW("ZB", "Zigbee lost, watching…");
+        } else if (esp_log_timestamp() - disconnectedSince > 30'000) {
+            ESP_LOGE("ZB", "Disconnected >30 s, rebooting");
+            esp_restart();                                // hard reset
+        }
+    } else {
+        disconnectedSince = 0;                            // link OK
+    }
+}
+
 void setup() {
+  zbWatchdogTmr = xTimerCreate("zbwd",                 // name
+                               pdMS_TO_TICKS(10'000),  // fire every 10 s
+                               pdTRUE,                 // auto‑reload
+                               nullptr,                // ID not used
+                               zbWatchdogCb);          // callback
+  xTimerStart(zbWatchdogTmr, 0);
+
   Serial.begin(115200);
 
   ioLock = xSemaphoreCreateMutex();
@@ -111,16 +138,6 @@ void loop() {
     }
   }
 
-  // Reconnect logic if Zigbee disconnects
-  if (!Zigbee.connected()) {
-    Serial.println("Zigbee connection lost, attempting rejoin…");
-    static unsigned long lostAt = millis();
-    if (millis() - lostAt > 30000) {
-      Serial.println("Disconnected >30s, restarting");
-      ESP.restart();
-    }
-  }
-
   // Factory reset: hold reset button for 3s
   if (digitalRead(resetButtonPin) == LOW) {
     unsigned long t0 = millis();
@@ -134,5 +151,6 @@ void loop() {
     }
   }
 
-  delay(100); // Small delay to reduce loop frequency
+
+  vTaskDelay(pdMS_TO_TICKS(33));   // or even longer
 }

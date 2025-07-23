@@ -10,7 +10,6 @@
 // Constants & configuration
 // -----------------------------------------------------------------------------
 #define ZIGBEE_RGB_LIGHT_ENDPOINT   10
-#define CONTACT_SWITCH_ENDPOINT_NUMBER 11
 #define BUTTON_PIN                  BOOT_PIN
 #define BED_BUTTON_PIN              8
 #define EEPROM_SIZE                 5
@@ -21,7 +20,7 @@ static constexpr uint8_t REAL_LEDS   = 30;
 static constexpr uint8_t TOTAL_LEDS  = SKIP + REAL_LEDS;
 
 // Transition duration (ms)
-static constexpr uint32_t DEFAULT_TRANSITION_MS = 3000;  // programmable
+static constexpr uint32_t DEFAULT_TRANSITION_MS = 800;  // programmable
 
 // If SKIP == 0 we read color from LED 1, otherwise from SKIP
 static constexpr uint8_t FIRST_VISIBLE_LED = (SKIP == 0) ? 1 : SKIP;
@@ -35,7 +34,6 @@ CRGB leds0[TOTAL_LEDS];
 // Zigbee endpoints
 // -----------------------------------------------------------------------------
 ZigbeeColorDimmableLight zbColorLight(ZIGBEE_RGB_LIGHT_ENDPOINT);
-ZigbeeContactSwitch      zbContactSwitch(CONTACT_SWITCH_ENDPOINT_NUMBER);
 
 // -----------------------------------------------------------------------------
 // Persistent config
@@ -227,7 +225,6 @@ void setup() {
 
   Serial.println("Adding Zigbee endpoint");
   Zigbee.addEndpoint(&zbColorLight);
-  Zigbee.addEndpoint(&zbContactSwitch);
 
   if (!Zigbee.begin(ZIGBEE_ROUTER)) {
     Serial.println("Zigbee failed to start, rebooting");
@@ -239,8 +236,6 @@ void setup() {
     delay(100);
   }
   Serial.println(" connected");
-
-  zbContactSwitch.setClosed();
 
   // Load last saved color and fade to it
   RGBCfg s;
@@ -269,23 +264,6 @@ void loop() {
     zbColorLight.setLightLevel(
       zbColorLight.getLightLevel() + 50
     );
-  }
-
-  // Bed button debounce -> contact switch
-  bool raw = digitalRead(BED_BUTTON_PIN);
-  if (raw != candidate) {             // first time we see a flip
-    candidate = raw;
-    lastFlip  = millis();             // start debounce timer
-  }
-  if ((millis() - lastFlip) >= DEBOUNCE_MS && candidate != stable) {
-    stable = candidate;               // accept it
-    if (stable == LOW) {              // pressed
-      zbContactSwitch.setOpen();
-      Serial.println("setting open");
-    } else {
-      zbContactSwitch.setClosed();
-      Serial.println("setting closed");
-    }
   }
 
   // Tick the transition engine

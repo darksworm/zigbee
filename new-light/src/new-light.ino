@@ -5,18 +5,24 @@
 #include <EEPROM.h>
 #include "Zigbee.h"
 #include <FastLED.h>
-
 // -----------------------------------------------------------------------------
 // Constants & configuration
 // -----------------------------------------------------------------------------
-#define ZIGBEE_RGB_LIGHT_ENDPOINT   10
-#define BUTTON_PIN                  BOOT_PIN
-#define BED_BUTTON_PIN              8
-#define EEPROM_SIZE                 5
+
+#define OTA_MANUFACTURER_CODE               0x5555
+#define OTA_UPGRADE_FIRMWARE_VERSION        0x1
+#define OTA_UPGRADE_HW_VERSION              0x1
+#define OTA_IMAGE_TYPE_CODE                 0x1
+
+#define ZIGBEE_RGB_LIGHT_ENDPOINT           11
+
+#define BUTTON_PIN                          BOOT_PIN
+
+#define EEPROM_SIZE                         5
 
 // Each strip has 1 booster LED (idx 0) + N real LEDs (1..N)
-static constexpr uint8_t SKIP        = 0;      // index to skip (booster), keep as 0 per original code
-static constexpr uint8_t REAL_LEDS   = 30;
+static constexpr uint8_t SKIP        = 0;      // index to skip (booster), keep as 0
+static constexpr uint8_t REAL_LEDS   = 80;
 static constexpr uint8_t TOTAL_LEDS  = SKIP + REAL_LEDS;
 
 // Transition duration (ms)
@@ -96,10 +102,6 @@ inline uint8_t currentShownLevel() {
 
 static void applyFrame(const CRGB &c, uint8_t lvl) {
   FastLED.setBrightness(lvl);
-
-  // Keep booster behavior as before if you want it black; comment out next line if not needed
-  // leds0[0] = CRGB::Black;
-
   for (uint8_t i = SKIP; i < TOTAL_LEDS; ++i) {
     leds0[i] = (lvl > 1) ? c : CRGB::Black;
   }
@@ -169,7 +171,7 @@ void setRGBLight(bool state,
 }
 
 // -----------------------------------------------------------------------------
-// Identify callback
+// Identify callback (optional, keep or remove)
 // -----------------------------------------------------------------------------
 void identify(uint16_t time)
 {
@@ -193,35 +195,32 @@ void identify(uint16_t time)
 // -----------------------------------------------------------------------------
 // Setup & loop
 // -----------------------------------------------------------------------------
-bool stable     = HIGH;          // debounced state
-bool candidate  = HIGH;          // possible new state
-unsigned long lastFlip = 0;
-#define DEBOUNCE_MS 25
-
 void setup() {
   Serial.begin(115200);
   EEPROM.begin(EEPROM_SIZE);
 
   FastLED.setBrightness(255);
-  FastLED.setMaxPowerInMilliWatts(4000);
-
+  FastLED.setMaxPowerInMilliWatts(10000);
   auto &ctl0 = FastLED.addLeds<WS2812B, 12, RGB>(leds0, TOTAL_LEDS);
   ctl0.setCorrection(TypicalLEDStrip);
 
   // Clear all pixels (booster + real)
-  for (uint8_t i = 0; i < TOTAL_LEDS; ++i) {
-    leds0[i] = CRGB::Black;
-  }
+  for (uint8_t i = 0; i < TOTAL_LEDS; ++i) leds0[i] = CRGB::Black;
   FastLED.show();
 
   // Buttons
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(BED_BUTTON_PIN, INPUT);
 
   // Zigbee callbacks & endpoint
   zbColorLight.onLightChange(setRGBLight);
   zbColorLight.onIdentify(identify);
   zbColorLight.setManufacturerAndModel("ilmars-engineering", "color-tube");
+
+  zbColorLight.addOTAClient(OTA_UPGRADE_FIRMWARE_VERSION,
+                            OTA_UPGRADE_FIRMWARE_VERSION,
+                            OTA_UPGRADE_HW_VERSION,
+                            OTA_MANUFACTURER_CODE,
+                            OTA_IMAGE_TYPE_CODE);
 
   Serial.println("Adding Zigbee endpoint");
   Zigbee.addEndpoint(&zbColorLight);
@@ -236,6 +235,8 @@ void setup() {
     delay(100);
   }
   Serial.println(" connected");
+
+  zbColorLight.requestOTAUpdate();
 
   // Load last saved color and fade to it
   RGBCfg s;
@@ -261,9 +262,7 @@ void loop() {
         Zigbee.factoryReset();
       }
     }
-    zbColorLight.setLightLevel(
-      zbColorLight.getLightLevel() + 50
-    );
+    zbColorLight.setLightLevel(zbColorLight.getLightLevel() + 50);
   }
 
   // Tick the transition engine

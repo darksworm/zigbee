@@ -1,0 +1,126 @@
+#ifndef ZIGBEE_MODE_ZCZR
+  #error "Zigbee router mode is not selected in Tools->Zigbee mode"
+#endif
+
+#include "Zigbee.h"
+#include "DHTesp.h"
+
+static constexpr uint8_t RELAY_PIN    = 13;
+static constexpr uint8_t DHT_PIN      = 12;
+static constexpr auto      DHT_TYPE    = DHTesp::DHT22;
+
+static constexpr uint8_t HUMIDITY_EP  = 10;
+static constexpr uint8_t RELAY_EP     = 11;
+
+portMUX_TYPE relayMux    = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE humidityMux = portMUX_INITIALIZER_UNLOCKED;
+
+ZigbeeTempSensor zbTemp(HUMIDITY_EP);
+ZigbeeLight     zbRelay(RELAY_EP);
+DHTesp          dht;               // Using DHTesp driver
+
+volatile float lastHumidity = NAN;
+volatile bool  relayState   = false;
+
+// ——— Read humidity, always log status ———
+float readHumidity() {
+  float h = dht.getHumidity();
+  const char* stat = dht.getStatusString();
+  Serial.printf("[DHTesp] status: %s\n", stat);
+  if (isnan(h)) {
+    Serial.println("[DHTesp] humidity read = NAN");
+    return NAN;
+  }
+  Serial.printf("[DHTesp] Humidity = %.2f%%\n", h);
+  return h;
+}
+
+// ——— Report humidity over Zigbee ———
+void reportHumidity() {
+  float h = readHumidity();
+  if (!isnan(h)) {
+    portENTER_CRITICAL(&humidityMux);
+      lastHumidity = h;
+    portEXIT_CRITICAL(&humidityMux);
+
+    zbTemp.setHumidity(h);
+    zbTemp.report();  // void
+    Serial.printf("[ZIGBEE] Reported humidity = %.2f%%\n", h);
+  }
+}
+
+// ——— Handler for incoming On/Off commands ———
+void relayChangeHandler(bool on) {
+  Serial.printf("[ZIGBEE] Remote request relay %s\n", on ? "ON" : "OFF");
+  portENTER_CRITICAL(&relayMux);
+    relayState = on;
+    digitalWrite(RELAY_PIN, on ? HIGH : LOW);
+  portEXIT_CRITICAL(&relayMux);
+  Serial.printf("[RELAY] GPIO set to %s\n", on ? "HIGH" : "LOW");
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("[SETUP] Starting...");
+
+  // — Relay setup —
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+  relayState = false;
+
+  // — DHTesp setup (with internal pull-up) —
+  pinMode(DHT_PIN, INPUT_PULLUP);
+  dht.setup(DHT_PIN, DHT_TYPE);
+  Serial.printf("[SETUP] DHTesp initialized on pin %d with pullup\n", DHT_PIN);
+
+  // — Zigbee Humidity endpoint —
+  zbTemp.setManufacturerAndModel("bathroom-zigbee", "humidity-sensor");
+  zbTemp.addHumiditySensor(0, 100, 1);
+
+  // — Zigbee Relay endpoint (as Light cluster) —
+  zbRelay.setManufacturerAndModel("bathroom-zigbee", "relay-switch");
+  // we’ll attach the callback after sync
+
+  Zigbee.addEndpoint(&zbTemp);
+  Zigbee.addEndpoint(&zbRelay);
+
+  if (!Zigbee.begin(ZIGBEE_ROUTER)) {
+    Serial.println("[ZIGBEE] begin() failed; rebooting...");
+    ESP.restart();
+  }
+  Serial.print("[ZIGBEE] Joining network");
+  while (!Zigbee.connected()) {
+    Serial.print('.');
+    delay(100);
+  }
+  Serial.println(" connected!");
+
+  // — Sync initial relay state without recursion —
+  zbRelay.onLightChange(nullptr);            // temporarily disable callback
+  bool initOn = zbRelay.getLightState();     // what the coordinator wants
+  Serial.printf("[SETUP] Coord thinks relay = %s\n", initOn ? "ON" : "OFF");
+
+  portENTER_CRITICAL(&relayMux);
+    relayState = initOn;
+    digitalWrite(RELAY_PIN, initOn ? HIGH : LOW);
+  portEXIT_CRITICAL(&relayMux);
+
+  zbRelay.setLight(initOn);                  // sync Zigbee attribute to hardware
+  zbRelay.onLightChange(relayChangeHandler); // re-enable callback
+
+  // — Initial humidity report —
+  reportHumidity();
+
+  Serial.println("[SETUP] Ready.\n");
+}
+
+unsigned long lastHumMs = 0;
+void loop() {
+  // Poll every 5s (per DHT22 datasheet)
+  if (millis() - lastHumMs > 5000) {
+    lastHumMs = millis();
+    Serial.println("[LOOP] Measuring humidity...");
+    reportHumidity();
+  }
+  delay(10);
+}
